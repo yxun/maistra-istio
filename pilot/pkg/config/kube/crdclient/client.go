@@ -353,6 +353,10 @@ func (cl *Client) addCRD(name string) {
 	filter := cl.filtersByGVK[resourceGVK]
 	objectFilter := filter.ObjectFilter
 	filter.ObjectFilter = func(t any) bool {
+		// if in gw controller mode, don't filter gw-api resources
+		if features.EnableGatewayControllerMode && s.Group() == gvk.KubernetesGateway.Group {
+			return true
+		}
 		if objectFilter != nil && !objectFilter(t) {
 			return false
 		}

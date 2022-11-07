@@ -716,6 +716,10 @@ var (
 
 	EnableIOR = env.RegisterBoolVar("ENABLE_IOR", false,
 		"Whether to enable IOR component, which provides integration between Istio Gateways and OpenShift Routes").Get()
+
+	EnableGatewayControllerMode = env.Register("PILOT_ENABLE_GATEWAY_CONTROLLER_MODE", false,
+		"If enabled, istiod will watch Gateway API and k8s resources in every namespace, but Istio resources will be limited to "+
+			"namespaces that match the meshConfig.discoverySelectors").Get()
 )
 
 // UnsafeFeaturesEnabled returns true if any unsafe features are enabled.
