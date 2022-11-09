@@ -19,6 +19,7 @@ import (
 	k8s "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	"istio.io/istio/pilot/pkg/credentials"
+	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
 	creds "istio.io/istio/pilot/pkg/model/credentials"
 	"istio.io/istio/pkg/config"
@@ -26,8 +27,12 @@ import (
 	"istio.io/istio/pkg/util/sets"
 )
 
+var (
+	defaultClassName = k8s.ObjectName(features.GatewayAPIDefaultGatewayClass)
+	controllerName   = k8s.GatewayController(features.GatewayAPIControllerName)
+)
+
 const (
-	defaultClassName             = "istio"
 	gatewayAliasForAnnotationKey = "gateway.istio.io/alias-for"
 	gatewayTLSTerminateModeKey   = "gateway.istio.io/tls-terminate-mode"
 	gatewayNameOverride          = "gateway.istio.io/name-override"
