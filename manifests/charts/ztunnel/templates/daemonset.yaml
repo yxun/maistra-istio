@@ -136,7 +136,7 @@ spec:
               audience: istio-ca
       - name: istiod-ca-cert
         configMap:
-          name: istio-ca-root-cert
+          name: {{ .Values.global.caCertConfigMapName }}
       {{- with .Values.volumes }}
         {{- toYaml . | nindent 6}}
       {{- end }}
