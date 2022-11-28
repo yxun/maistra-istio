@@ -729,6 +729,9 @@ var (
 
 	CACertConfigMapName = env.RegisterStringVar("PILOT_CA_CERT_CONFIG_MAP_NAME", "istio-ca-root-cert",
 		"Name of the ConfigMap that stores the CA Root Certificate.").Get()
+
+	DefaultLabelsForInjectedGateways = env.RegisterStringVar("PILOT_GATEWAY_API_DEPLOYMENT_DEFAULT_LABELS", "",
+		"Default labels to set on Deployments created by the Gateway API Deployment Controller").Get()
 )
 
 // UnsafeFeaturesEnabled returns true if any unsafe features are enabled.
