@@ -696,7 +696,9 @@ func (c *client) Shutdown() {
 	// c.dynamicInformer.Shutdown()
 	// c.metadataInformer.Shutdown()
 	c.istioInformer.Shutdown()
-	c.gatewayapiInformer.Shutdown()
+	if features.EnableGatewayAPI {
+		c.gatewayapiInformer.Shutdown()
+	}
 	c.extInformer.Shutdown()
 }
 
