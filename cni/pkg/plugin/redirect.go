@@ -218,7 +218,7 @@ func NewRedirect(pi *PodInfo) (*Redirect, error) {
 			"redirectMode", isFound, valErr)
 	}
 	redir.noRedirectUID = defaultNoRedirectUID
-	if pi.ProxyUID != nil {
+	if pi.ProxyUID != nil && *pi.ProxyUID != 0 {
 		redir.noRedirectUID = fmt.Sprintf("%d", *pi.ProxyUID)
 	}
 	redir.noRedirectGID = defaultNoRedirectGID
