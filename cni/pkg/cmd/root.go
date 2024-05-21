@@ -43,7 +43,11 @@ import (
 
 var (
 	logOptions   = log.DefaultOptions()
-	ctrlzOptions = ctrlz.DefaultOptions()
+	ctrlzOptions = func() *ctrlz.Options {
+		o := ctrlz.DefaultOptions()
+		o.EnablePprof = true
+		return o
+	}()
 )
 
 var rootCmd = &cobra.Command{
@@ -257,6 +261,7 @@ func constructConfig() (*config.Config, error) {
 
 	repairCfg := config.RepairConfig{
 		Enabled:            viper.GetBool(constants.RepairEnabled),
+		RepairPods:         viper.GetBool(constants.RepairRepairPods),
 		DeletePods:         viper.GetBool(constants.RepairDeletePods),
 		LabelPods:          viper.GetBool(constants.RepairLabelPods),
 		LabelKey:           viper.GetString(constants.RepairLabelKey),

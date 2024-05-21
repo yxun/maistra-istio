@@ -15,6 +15,7 @@
 package route_test
 
 import (
+	"log"
 	"reflect"
 	"testing"
 
@@ -23,6 +24,7 @@ import (
 	matcher "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
 	"github.com/onsi/gomega"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"k8s.io/apimachinery/pkg/types"
 
 	networking "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pilot/pkg/model"
@@ -305,6 +307,15 @@ func TestBuildHTTPRoutes(t *testing.T) {
 		cg := v1alpha3.NewConfigGenTest(t, v1alpha3.TestOptions{})
 
 		routes, err := route.BuildHTTPRoutesForVirtualService(node(cg), virtualServiceWithPresentMatchingOnHeader,
+			serviceRegistry, nil, 8080, gatewayNames, route.RouteOptions{})
+		g.Expect(err).NotTo(gomega.HaveOccurred())
+		xdstest.ValidateRoutes(t, routes)
+		g.Expect(len(routes)).To(gomega.Equal(1))
+		g.Expect(routes[0].GetMatch().GetHeaders()[0].GetName()).To(gomega.Equal("FOO-HEADER"))
+		g.Expect(routes[0].GetMatch().GetHeaders()[0].GetPresentMatch()).To(gomega.Equal(true))
+		g.Expect(routes[0].GetMatch().GetHeaders()[0].GetInvertMatch()).To(gomega.Equal(false))
+
+		routes, err = route.BuildHTTPRoutesForVirtualService(node(cg), virtualServiceWithPresentMatchingOnHeader2,
 			serviceRegistry, nil, 8080, gatewayNames, route.RouteOptions{})
 		g.Expect(err).NotTo(gomega.HaveOccurred())
 		xdstest.ValidateRoutes(t, routes)
@@ -1143,7 +1154,9 @@ func TestBuildHTTPRoutes(t *testing.T) {
 			},
 			Services: exampleService,
 		})
-		vhosts := route.BuildSidecarVirtualHostWrapper(nil, node(cg), cg.PushContext(), serviceRegistry, []config.Config{}, 8080)
+		vhosts := route.BuildSidecarVirtualHostWrapper(nil, node(cg), cg.PushContext(), serviceRegistry,
+			[]config.Config{}, 8080, map[host.Name]types.NamespacedName{},
+		)
 		g.Expect(vhosts[0].Routes[0].Action.(*envoyroute.Route_Route).Route.HashPolicy).NotTo(gomega.BeNil())
 	})
 	t.Run("for no virtualservice but has destinationrule with portLevel consistentHash loadbalancer", func(t *testing.T) {
@@ -1161,7 +1174,9 @@ func TestBuildHTTPRoutes(t *testing.T) {
 			},
 			Services: exampleService,
 		})
-		vhosts := route.BuildSidecarVirtualHostWrapper(nil, node(cg), cg.PushContext(), serviceRegistry, []config.Config{}, 8080)
+		vhosts := route.BuildSidecarVirtualHostWrapper(nil, node(cg), cg.PushContext(), serviceRegistry,
+			[]config.Config{}, 8080, map[host.Name]types.NamespacedName{},
+		)
 
 		hashPolicy := &envoyroute.RouteAction_HashPolicy{
 			PolicySpecifier: &envoyroute.RouteAction_HashPolicy_Cookie_{
@@ -1171,6 +1186,87 @@ func TestBuildHTTPRoutes(t *testing.T) {
 			},
 		}
 		g.Expect(vhosts[0].Routes[0].Action.(*envoyroute.Route_Route).Route.HashPolicy).To(gomega.ConsistOf(hashPolicy))
+	})
+
+	t.Run("for virtualservices and services with overlapping wildcard hosts", func(t *testing.T) {
+		g := gomega.NewWithT(t)
+		cg := v1alpha3.NewConfigGenTest(t, v1alpha3.TestOptions{
+			Configs: []config.Config{
+				virtualServiceWithWildcardHost,
+				virtualServiceWithNestedWildcardHost,
+				virtualServiceWithGoogleWildcardHost,
+			},
+			Services: []*model.Service{exampleWildcardService, exampleNestedWildcardService},
+		})
+
+		// Redefine the service registry for this test
+		serviceRegistry := map[host.Name]*model.Service{
+			"*.example.org":             exampleWildcardService,
+			"goodbye.hello.example.org": exampleNestedWildcardService,
+		}
+
+		wildcardIndex := map[host.Name]types.NamespacedName{
+			"*.example.org":       virtualServiceWithWildcardHost.NamespacedName(),
+			"*.hello.example.org": virtualServiceWithNestedWildcardHost.NamespacedName(),
+		}
+
+		vhosts := route.BuildSidecarVirtualHostWrapper(nil, node(cg), cg.PushContext(), serviceRegistry,
+			[]config.Config{
+				virtualServiceWithWildcardHost,
+				virtualServiceWithNestedWildcardHost,
+				virtualServiceWithGoogleWildcardHost,
+			}, 8080,
+			wildcardIndex,
+		)
+		log.Printf("%#v", vhosts)
+		// *.example.org, *.hello.example.org. The *.google.com VS is missing from virtualHosts because
+		// it is not attached to a service
+		g.Expect(vhosts).To(gomega.HaveLen(2))
+		for _, vhost := range vhosts {
+			g.Expect(vhost.Services).To(gomega.HaveLen(1))
+			g.Expect(vhost.Routes).To(gomega.HaveLen(1))
+		}
+	})
+
+	t.Run("for virtualservices with with wildcard hosts outside of the serviceregistry (on port 80)", func(t *testing.T) {
+		g := gomega.NewWithT(t)
+		cg := v1alpha3.NewConfigGenTest(t, v1alpha3.TestOptions{
+			Configs: []config.Config{
+				virtualServiceWithWildcardHost,
+				virtualServiceWithNestedWildcardHost,
+				virtualServiceWithGoogleWildcardHost,
+			},
+			Services: []*model.Service{exampleWildcardService, exampleNestedWildcardService},
+		})
+
+		// Redefine the service registry for this test
+		serviceRegistry := map[host.Name]*model.Service{
+			"*.example.org":             exampleWildcardService,
+			"goodbye.hello.example.org": exampleNestedWildcardService,
+		}
+
+		// note that the VS containing *.google.com doesn't have an entry in the wildcard index
+		wildcardIndex := map[host.Name]types.NamespacedName{
+			"*.example.org":       virtualServiceWithWildcardHost.NamespacedName(),
+			"*.hello.example.org": virtualServiceWithNestedWildcardHost.NamespacedName(),
+		}
+
+		vhosts := route.BuildSidecarVirtualHostWrapper(nil, node(cg), cg.PushContext(), serviceRegistry,
+			[]config.Config{virtualServiceWithGoogleWildcardHost}, 80, wildcardIndex,
+		)
+		// The service hosts (*.example.org and goodbye.hello.example.org) and the unattached VS host (*.google.com)
+		g.Expect(vhosts).To(gomega.HaveLen(3))
+		for _, vhost := range vhosts {
+			if len(vhost.VirtualServiceHosts) > 0 && vhost.VirtualServiceHosts[0] == "*.google.com" {
+				// The *.google.com VS shouldn't have any services
+				g.Expect(vhost.Services).To(gomega.HaveLen(0))
+			} else {
+				// The other two VSs should have one service each
+				g.Expect(vhost.Services).To(gomega.HaveLen(1))
+			}
+			// All VSs should have one route
+			g.Expect(vhost.Routes).To(gomega.HaveLen(1))
+		}
 	})
 }
 
@@ -1417,6 +1513,96 @@ var virtualServiceWithCatchAllPort = config.Config{
 							Port: &networking.PortSelector{
 								Number: 8484,
 							},
+						},
+					},
+				},
+			},
+		},
+	},
+}
+
+var virtualServiceWithWildcardHost = config.Config{
+	Meta: config.Meta{
+		GroupVersionKind: gvk.VirtualService,
+		Name:             "wildcard",
+	},
+	Spec: &networking.VirtualService{
+		Hosts: []string{"*.example.org"},
+		Http: []*networking.HTTPRoute{
+			{
+				Match: []*networking.HTTPMatchRequest{
+					{
+						Name: "https",
+						Port: uint32(8080),
+					},
+				},
+				Route: []*networking.HTTPRouteDestination{
+					{
+						Destination: &networking.Destination{
+							Host: "*.example.org",
+							Port: &networking.PortSelector{
+								Number: 8080,
+							},
+						},
+					},
+				},
+			},
+		},
+	},
+}
+
+var virtualServiceWithNestedWildcardHost = config.Config{
+	Meta: config.Meta{
+		GroupVersionKind: gvk.VirtualService,
+		Name:             "nested-wildcard",
+	},
+	Spec: &networking.VirtualService{
+		Hosts: []string{"*.hello.example.org"},
+		Http: []*networking.HTTPRoute{
+			{
+				Match: []*networking.HTTPMatchRequest{
+					{
+						Name: "https",
+						Port: uint32(8080),
+					},
+				},
+				Route: []*networking.HTTPRouteDestination{
+					{
+						Destination: &networking.Destination{
+							Host: "*.hello.example.org",
+							Port: &networking.PortSelector{
+								Number: 8080,
+							},
+						},
+					},
+				},
+			},
+		},
+	},
+}
+
+var virtualServiceWithGoogleWildcardHost = config.Config{
+	Meta: config.Meta{
+		GroupVersionKind: gvk.VirtualService,
+		Name:             "google-wildcard",
+	},
+	Spec: &networking.VirtualService{
+		Hosts: []string{"*.google.com"},
+		Http: []*networking.HTTPRoute{
+			{
+				Match: []*networking.HTTPMatchRequest{
+					{
+						Uri: &networking.StringMatch{
+							MatchType: &networking.StringMatch_Prefix{
+								Prefix: "/",
+							},
+						},
+					},
+				},
+				Route: []*networking.HTTPRouteDestination{
+					{
+						Destination: &networking.Destination{
+							Host: "internal-google.default.svc.cluster.local",
 						},
 					},
 				},
@@ -2217,6 +2403,34 @@ var virtualServiceWithPresentMatchingOnHeader = config.Config{
 	},
 }
 
+var virtualServiceWithPresentMatchingOnHeader2 = config.Config{
+	Meta: config.Meta{
+		GroupVersionKind: gvk.VirtualService,
+		Name:             "acme",
+	},
+	Spec: &networking.VirtualService{
+		Hosts:    []string{},
+		Gateways: []string{"some-gateway"},
+		Http: []*networking.HTTPRoute{
+			{
+				Match: []*networking.HTTPMatchRequest{
+					{
+						Name: "presence",
+						Headers: map[string]*networking.StringMatch{
+							"FOO-HEADER": {},
+						},
+					},
+				},
+				Redirect: &networking.HTTPRedirect{
+					Uri:          "example.org",
+					Authority:    "some-authority.default.svc.cluster.local",
+					RedirectCode: 308,
+				},
+			},
+		},
+	},
+}
+
 var virtualServiceWithPresentMatchingOnWithoutHeader = config.Config{
 	Meta: config.Meta{
 		GroupVersionKind: gvk.VirtualService,
@@ -2542,7 +2756,19 @@ var networkingDestinationRule = &networking.DestinationRule{
 	},
 }
 
-var exampleService = []*model.Service{{Hostname: "*.example.org", Attributes: model.ServiceAttributes{Namespace: "istio-system"}}}
+var (
+	exampleService         = []*model.Service{{Hostname: "*.example.org", Attributes: model.ServiceAttributes{Namespace: "istio-system"}}}
+	exampleWildcardService = &model.Service{
+		Hostname:   "*.example.org",
+		Attributes: model.ServiceAttributes{Namespace: "istio-system"},
+		Ports:      []*model.Port{{Port: 8080, Protocol: "HTTP"}},
+	}
+	exampleNestedWildcardService = &model.Service{
+		Hostname:   "goodbye.hello.example.org",
+		Attributes: model.ServiceAttributes{Namespace: "istio-system"},
+		Ports:      []*model.Port{{Port: 8080, Protocol: "HTTP"}},
+	}
+)
 
 var networkingDestinationRuleWithPortLevelTrafficPolicy = &networking.DestinationRule{
 	Host: "*.example.org",

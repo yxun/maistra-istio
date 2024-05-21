@@ -1282,7 +1282,7 @@ func (ps *PushContext) updateContext(
 
 	for conf := range pushReq.ConfigsUpdated {
 		switch conf.Kind {
-		case kind.ServiceEntry:
+		case kind.ServiceEntry, kind.DNSName:
 			servicesChanged = true
 		case kind.DestinationRule:
 			destinationRulesChanged = true
@@ -1413,8 +1413,10 @@ func (ps *PushContext) initServiceRegistry(env *Environment, configsUpdate sets.
 
 	for _, s := range allServices {
 		portMap := map[string]int{}
+		ports := sets.New[int]()
 		for _, port := range s.Ports {
 			portMap[port.Name] = port.Port
+			ports.Insert(port.Port)
 		}
 
 		svcKey := s.Key()
@@ -1423,7 +1425,11 @@ func (ps *PushContext) initServiceRegistry(env *Environment, configsUpdate sets.
 		}
 		shards, ok := env.EndpointIndex.ShardsForService(string(s.Hostname), s.Attributes.Namespace)
 		if ok {
-			ps.ServiceIndex.instancesByPort[svcKey] = shards.CopyEndpoints(portMap)
+			instancesByPort := shards.CopyEndpoints(portMap, ports)
+			// Iterate over the instances and add them to the service index to avoid overiding the existing port instances.
+			for port, instances := range instancesByPort {
+				ps.ServiceIndex.instancesByPort[svcKey][port] = instances
+			}
 		}
 		if _, f := ps.ServiceIndex.HostnameAndNamespace[s.Hostname]; !f {
 			ps.ServiceIndex.HostnameAndNamespace[s.Hostname] = map[string]*Service{}
@@ -1640,12 +1646,6 @@ func (ps *PushContext) initVirtualServices(env *Environment) {
 	}
 
 	totalVirtualServices.Record(float64(len(virtualServices)))
-
-	// TODO(rshriram): parse each virtual service and maintain a map of the
-	// virtualservice name, the list of registry hosts in the VS and non
-	// registry DNS names in the VS.  This should cut down processing in
-	// the RDS code. See separateVSHostsAndServices in route/route.go
-	sortConfigByCreationTime(vservices)
 
 	// convert all shortnames in virtual services into FQDNs
 	for _, r := range vservices {
@@ -1900,7 +1900,7 @@ func (ps *PushContext) setDestinationRules(configs []config.Config) {
 		// We only honor . and *
 		if exportToSet.IsEmpty() && ps.exportToDefaults.destinationRule.Contains(visibility.Private) {
 			isPrivateOnly = true
-		} else if exportToSet.Len() == 1 && exportToSet.Contains(visibility.Private) || exportToSet.Contains(visibility.Instance(configs[i].Namespace)) {
+		} else if exportToSet.Len() == 1 && (exportToSet.Contains(visibility.Private) || exportToSet.Contains(visibility.Instance(configs[i].Namespace))) {
 			isPrivateOnly = true
 		}
 

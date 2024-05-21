@@ -54,6 +54,7 @@ import (
 	"istio.io/istio/pkg/slices"
 	"istio.io/istio/pkg/util/protomarshal"
 	"istio.io/istio/pkg/util/sets"
+	iptablesconstants "istio.io/istio/tools/istio-iptables/pkg/constants"
 )
 
 var (
@@ -468,7 +469,7 @@ func injectPod(req InjectionParameters) ([]byte, error) {
 		return nil, fmt.Errorf("failed to run injection template: %v", err)
 	}
 
-	mergedPod, err = reapplyOverwrittenContainers(mergedPod, req.pod, injectedPodData)
+	mergedPod, err = reapplyOverwrittenContainers(mergedPod, req.pod, injectedPodData, req.proxyConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to re apply container: %v", err)
 	}
@@ -499,7 +500,9 @@ func injectPod(req InjectionParameters) ([]byte, error) {
 //
 // Where "overlap" is a container defined in both the original and template pod. Typically, this would mean
 // the user has defined an `istio-proxy` container in their own pod spec.
-func reapplyOverwrittenContainers(finalPod *corev1.Pod, originalPod *corev1.Pod, templatePod *corev1.Pod) (*corev1.Pod, error) {
+func reapplyOverwrittenContainers(finalPod *corev1.Pod, originalPod *corev1.Pod, templatePod *corev1.Pod,
+	proxyConfig *meshconfig.ProxyConfig,
+) (*corev1.Pod, error) {
 	overrides := ParsedContainers{}
 	existingOverrides := ParsedContainers{}
 	if annotationOverrides, f := originalPod.Annotations[annotation.ProxyOverrides.Name]; f {
@@ -530,6 +533,7 @@ func reapplyOverwrittenContainers(finalPod *corev1.Pod, originalPod *corev1.Pod,
 		if overlay.Image == AutoImage {
 			overlay.Image = ""
 		}
+
 		overrides.Containers = append(overrides.Containers, overlay)
 		newMergedPod, err := applyContainer(finalPod, overlay)
 		if err != nil {
@@ -552,6 +556,7 @@ func reapplyOverwrittenContainers(finalPod *corev1.Pod, originalPod *corev1.Pod,
 		if overlay.Image == AutoImage {
 			overlay.Image = ""
 		}
+
 		overrides.InitContainers = append(overrides.InitContainers, overlay)
 		newMergedPod, err := applyInitContainer(finalPod, overlay)
 		if err != nil {
@@ -572,7 +577,83 @@ func reapplyOverwrittenContainers(finalPod *corev1.Pod, originalPod *corev1.Pod,
 		finalPod.Annotations[annotation.ProxyOverrides.Name] = string(js)
 	}
 
+	adjustInitContainerUser(finalPod, originalPod, proxyConfig)
+
 	return finalPod, nil
+}
+
+// adjustInitContainerUser adjusts the RunAsUser/Group fields and iptables parameter "-u <uid>"
+// in the init/validation container so that they match the value of SecurityContext.RunAsUser/Group
+// when it is present in the custom istio-proxy container supplied by the user.
+func adjustInitContainerUser(finalPod *corev1.Pod, originalPod *corev1.Pod, proxyConfig *meshconfig.ProxyConfig) {
+	userContainer := FindSidecar(originalPod)
+	if userContainer == nil {
+		// if user doesn't override the istio-proxy container, there's nothing to do
+		return
+	}
+
+	if userContainer.SecurityContext == nil || (userContainer.SecurityContext.RunAsUser == nil && userContainer.SecurityContext.RunAsGroup == nil) {
+		// if user doesn't override SecurityContext.RunAsUser/Group, there's nothing to do
+		return
+	}
+
+	// Locate the istio-init or istio-validation container
+	var initContainer *corev1.Container
+	for _, name := range []string{InitContainerName, ValidationContainerName} {
+		if container := FindContainer(name, finalPod.Spec.InitContainers); container != nil {
+			initContainer = container
+			break
+		}
+	}
+	if initContainer == nil {
+		// should not happen
+		log.Warn("Could not find either istio-init or istio-validation container")
+		return
+	}
+
+	// Overriding RunAsUser is now allowed in TPROXY mode, it must always run with uid=0
+	tproxy := false
+	if proxyConfig.InterceptionMode == meshconfig.ProxyConfig_TPROXY {
+		tproxy = true
+	} else if mode, found := finalPod.Annotations[annotation.SidecarInterceptionMode.Name]; found && mode == iptablesconstants.TPROXY {
+		tproxy = true
+	}
+
+	// RunAsUser cannot be overridden (ie, must remain 0) in TPROXY mode
+	if tproxy && userContainer.SecurityContext.RunAsUser != nil {
+		sidecar := FindSidecar(finalPod)
+		if sidecar == nil {
+			// Should not happen
+			log.Warn("Could not find the istio-proxy container")
+			return
+		}
+		*sidecar.SecurityContext.RunAsUser = 0
+	}
+
+	// Make sure the validation container runs with the same uid/gid as the proxy (init container is untouched, it must run with 0)
+	if !tproxy && initContainer.Name == ValidationContainerName {
+		if initContainer.SecurityContext == nil {
+			initContainer.SecurityContext = &corev1.SecurityContext{}
+		}
+		if userContainer.SecurityContext.RunAsUser != nil {
+			initContainer.SecurityContext.RunAsUser = userContainer.SecurityContext.RunAsUser
+		}
+		if userContainer.SecurityContext.RunAsGroup != nil {
+			initContainer.SecurityContext.RunAsGroup = userContainer.SecurityContext.RunAsGroup
+		}
+	}
+
+	// Find the "-u <uid>" parameter in the init container and replace it with the userid from SecurityContext.RunAsUser
+	// but only if it's not 0. iptables --uid-owner argument must not be 0.
+	if userContainer.SecurityContext.RunAsUser == nil || *userContainer.SecurityContext.RunAsUser == 0 {
+		return
+	}
+	for i := range initContainer.Args {
+		if initContainer.Args[i] == "-u" {
+			initContainer.Args[i+1] = fmt.Sprintf("%d", *userContainer.SecurityContext.RunAsUser)
+			return
+		}
+	}
 }
 
 // parseStatus extracts containers from injected SidecarStatus annotation

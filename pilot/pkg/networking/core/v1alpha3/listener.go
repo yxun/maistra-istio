@@ -178,6 +178,9 @@ func BuildListenerTLSContext(serverTLSSettings *networking.ServerTLSSettings,
 		applyDownstreamTLSDefaults(mesh.GetTlsDefaults(), ctx.CommonTlsContext)
 		applyServerTLSSettings(serverTLSSettings, ctx.CommonTlsContext)
 	}
+
+	// Compliance for Envoy TLS downstreams.
+	authnmodel.EnforceCompliance(ctx.CommonTlsContext)
 	return ctx
 }
 
@@ -1115,13 +1118,17 @@ func buildGatewayListener(opts gatewayListenerOpts, transport istionetworking.Tr
 
 		res = &listener.Listener{
 			// TODO: need to sanitize the opts.bind if its a UDS socket, as it could have colons, that envoy doesn't like
-			Name:                             getListenerName(opts.bind, opts.port, istionetworking.TransportProtocolTCP),
-			Address:                          util.BuildAddress(opts.bind, uint32(opts.port)),
-			TrafficDirection:                 core.TrafficDirection_OUTBOUND,
-			ListenerFilters:                  listenerFilters,
-			FilterChains:                     filterChains,
-			ConnectionBalanceConfig:          connectionBalance,
-			ContinueOnListenerFiltersTimeout: true,
+			Name:                    getListenerName(opts.bind, opts.port, istionetworking.TransportProtocolTCP),
+			Address:                 util.BuildAddress(opts.bind, uint32(opts.port)),
+			TrafficDirection:        core.TrafficDirection_OUTBOUND,
+			ListenerFilters:         listenerFilters,
+			FilterChains:            filterChains,
+			ConnectionBalanceConfig: connectionBalance,
+			// For Gateways, we want no timeout. We should wait indefinitely for the TLS if we are sniffing.
+			// The timeout is useful for sidecars, where we may operate on server first traffic; for gateways if we have listener filters
+			// we know those filters are required.
+			ContinueOnListenerFiltersTimeout: false,
+			ListenerFiltersTimeout:           durationpb.New(0),
 		}
 		// add extra addresses for the listener
 		if features.EnableDualStack && len(opts.extraBind) > 0 {
@@ -1149,11 +1156,19 @@ func buildGatewayListener(opts gatewayListenerOpts, transport istionetworking.Tr
 				QuicOptions:            &listener.QuicProtocolOptions{},
 				DownstreamSocketConfig: &core.UdpSocketConfig{},
 			},
-			ContinueOnListenerFiltersTimeout: true,
+			// For Gateways, we want no timeout. We should wait indefinitely for the TLS if we are sniffing.
+			// The timeout is useful for sidecars, where we may operate on server first traffic; for gateways if we have listener filters
+			// we know those filters are required.
+			ContinueOnListenerFiltersTimeout: false,
+			ListenerFiltersTimeout:           durationpb.New(0),
 		}
 		// add extra addresses for the listener
 		if features.EnableDualStack && len(opts.extraBind) > 0 {
 			res.AdditionalAddresses = util.BuildAdditionalAddresses(opts.extraBind, uint32(opts.port))
+			// Ensure consistent transport protocol with main address
+			for _, additionalAddress := range res.AdditionalAddresses {
+				additionalAddress.GetAddress().GetSocketAddress().Protocol = transport.ToEnvoySocketProtocol()
+			}
 		}
 	}
 

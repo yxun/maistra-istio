@@ -128,7 +128,7 @@ func (c *Controller) handleSelectedNamespace(ns string) {
 		c.ambientIndex.HandleSelectedNamespace(ns, pods, c)
 	}
 
-	errs = multierror.Append(errs, c.endpoints.sync("", ns, model.EventAdd, false))
+	errs = multierror.Append(errs, c.endpoints.initializeNamespace(ns, false))
 
 	for _, handler := range c.namespaceDiscoveryHandlers {
 		handler(ns, model.EventAdd)
@@ -154,7 +154,7 @@ func (c *Controller) handleDeselectedNamespace(ns string) {
 		errs = multierror.Append(errs, c.pods.onEvent(nil, pod, model.EventDelete))
 	}
 
-	errs = multierror.Append(errs, c.endpoints.sync("", ns, model.EventDelete, false))
+	errs = multierror.Append(errs, c.endpoints.deleteEndpoints(ns))
 
 	for _, handler := range c.namespaceDiscoveryHandlers {
 		handler(ns, model.EventDelete)
