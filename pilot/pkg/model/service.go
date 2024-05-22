@@ -486,6 +486,10 @@ type IstioEndpoint struct {
 
 	// ServicePortName tracks the name of the port, this is used to select the IstioEndpoint by service port.
 	ServicePortName string
+	// LegacyClusterPortKey provides an alternative key from ServicePortName to support legacy quirks in the API.
+	// Basically, EDS merges by port name, but CDS historically ignored port name and matched on number.
+	// Note that for Kubernetes Service, this is identical - its only ServiceEntry where these checks can differ
+	LegacyClusterPortKey int
 
 	// ServiceAccount holds the associated service account.
 	ServiceAccount string
@@ -1241,7 +1245,8 @@ func (s *Service) Equals(other *Service) bool {
 	}
 
 	return s.DefaultAddress == other.DefaultAddress && s.AutoAllocatedIPv4Address == other.AutoAllocatedIPv4Address &&
-		s.AutoAllocatedIPv6Address == other.AutoAllocatedIPv6Address && s.Hostname == other.Hostname && s.MeshExternal == other.MeshExternal
+		s.AutoAllocatedIPv6Address == other.AutoAllocatedIPv6Address && s.Hostname == other.Hostname &&
+		s.Resolution == other.Resolution && s.MeshExternal == other.MeshExternal
 }
 
 // DeepCopy creates a clone of IstioEndpoint.

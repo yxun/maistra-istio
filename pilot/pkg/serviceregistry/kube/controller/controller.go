@@ -301,7 +301,7 @@ func NewController(kubeClient kubelib.Client, options Options) *Controller {
 	})
 	c.pods = newPodCache(c, c.podsClient, func(key types.NamespacedName) {
 		c.queue.Push(func() error {
-			return c.endpoints.sync(key.Name, key.Namespace, model.EventAdd, true)
+			return c.endpoints.podArrived(key.Name, key.Namespace)
 		})
 	})
 	registerHandlers[*v1.Pod](c, c.podsClient, "Pods", c.pods.onEvent, c.pods.labelFilter)
@@ -400,7 +400,7 @@ func (c *Controller) onServiceEvent(pre, curr *v1.Service, event model.Event) er
 	case model.EventDelete:
 		c.deleteService(svcConv)
 	default:
-		c.addOrUpdateService(curr, svcConv, event, false)
+		c.addOrUpdateService(pre, curr, svcConv, event, false)
 	}
 
 	return nil
@@ -428,7 +428,7 @@ func (c *Controller) deleteService(svc *model.Service) {
 	c.handlers.NotifyServiceHandlers(nil, svc, event)
 }
 
-func (c *Controller) addOrUpdateService(curr *v1.Service, currConv *model.Service, event model.Event, updateEDSCache bool) {
+func (c *Controller) addOrUpdateService(pre, curr *v1.Service, currConv *model.Service, event model.Event, updateEDSCache bool) {
 	needsFullPush := false
 	// First, process nodePort gateway service, whose externalIPs specified
 	// and loadbalancer gateway service
@@ -474,7 +474,7 @@ func (c *Controller) addOrUpdateService(curr *v1.Service, currConv *model.Servic
 	}
 
 	// filter out same service event
-	if event == model.EventUpdate && !serviceUpdateNeedsPush(prevConv, currConv) {
+	if event == model.EventUpdate && !serviceUpdateNeedsPush(pre, curr, prevConv, currConv) {
 		return
 	}
 
@@ -936,7 +936,7 @@ func (c *Controller) workloadInstanceHandler(si *model.WorkloadInstance, event m
 	matchedHostnames := slices.Map(matchedServices, func(e *v1.Service) host.Name {
 		return kube.ServiceHostname(e.Name, e.Namespace, c.opts.DomainSuffix)
 	})
-	c.endpoints.updateEDS(matchedHostnames, si.Namespace)
+	c.endpoints.pushEDS(matchedHostnames, si.Namespace)
 }
 
 func (c *Controller) onSystemNamespaceEvent(_, ns *v1.Namespace, ev model.Event) error {
@@ -1170,17 +1170,30 @@ func (c *Controller) servicesForNamespacedName(name types.NamespacedName) []*mod
 	return nil
 }
 
-func serviceUpdateNeedsPush(prev, curr *model.Service) bool {
+func serviceUpdateNeedsPush(prev, curr *v1.Service, preConv, currConv *model.Service) bool {
 	if !features.EnableOptimizedServicePush {
 		return true
 	}
-	if prev == nil {
-		return !curr.Attributes.ExportTo.Contains(visibility.None)
+	if preConv == nil {
+		return !currConv.Attributes.ExportTo.Contains(visibility.None)
 	}
 	// if service are not exported, no need to push
-	if prev.Attributes.ExportTo.Contains(visibility.None) &&
-		curr.Attributes.ExportTo.Contains(visibility.None) {
+	if preConv.Attributes.ExportTo.Contains(visibility.None) &&
+		currConv.Attributes.ExportTo.Contains(visibility.None) {
 		return false
 	}
-	return !prev.Equals(curr)
+	// Check if there are any changes we care about by comparing `model.Service`s
+	if !preConv.Equals(currConv) {
+		return true
+	}
+	// Also check if target ports are changed since they are not included in `model.Service`
+	// `preConv.Equals(currConv)` already makes sure the length of ports is not changed
+	if prev != nil && curr != nil {
+		if !slices.EqualFunc(prev.Spec.Ports, curr.Spec.Ports, func(a, b v1.ServicePort) bool {
+			return a.TargetPort == b.TargetPort
+		}) {
+			return true
+		}
+	}
+	return false
 }
