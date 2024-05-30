@@ -56,6 +56,25 @@ import (
 	"istio.io/istio/tests/integration/servicemesh/maistra"
 )
 
+const customGatewayClassAndControllerPatch = `[
+	{
+		"op": "add",
+		"path": "/spec/template/spec/containers/0/env/-",
+		"value": {
+			"name": "PILOT_GATEWAY_API_DEFAULT_GATEWAYCLASS",
+			"value": "openshift-default"
+		}
+	},
+	{
+		"op": "add",
+		"path": "/spec/template/spec/containers/0/env/-",
+		"value": {
+			"name": "PILOT_GATEWAY_API_CONTROLLER_NAME",
+			"value": "openshift.io/gateway-controller"
+		}
+	}
+]`
+
 var (
 	istioNs     namespace.Instance
 	secondaryNs namespace.Instance
@@ -96,14 +115,40 @@ func TestGateway(t *testing.T) {
 				t.Errorf("failed to deploy app 'b': %s", err)
 			}
 
-			t.NewSubTest("unmanaged").Run(UnmanagedGatewayTest)
-			t.NewSubTest("managed").Run(ManagedGatewayTest)
-			t.NewSubTest("managed-owner").Run(ManagedOwnerGatewayTest)
-			t.NewSubTest("managed-short-name").Run(ManagedGatewayShortNameTest)
+			t.NewSubTest("unmanaged").Run(func(t framework.TestContext) {
+				UnmanagedGatewayTest(t, "istio")
+			})
+			t.NewSubTest("managed").Run(func(t framework.TestContext) {
+				ManagedGatewayTest(t, "istio")
+			})
+			t.NewSubTest("managed-owner").Run(func(t framework.TestContext) {
+				ManagedOwnerGatewayTest(t, "istio")
+			})
+			t.NewSubTest("managed-short-name").Run(func(t framework.TestContext) {
+				ManagedGatewayShortNameTest(t, "istio")
+			})
+
+			patchFn := maistra.PatchIstiodAndRestart(namespace.Future(&istioNs), customGatewayClassAndControllerPatch)
+			if err := patchFn(t); err != nil {
+				t.Errorf("failed to patch istiod deployment: %s", err)
+			}
+
+			t.NewSubTest("unmanaged-custom-names").Run(func(t framework.TestContext) {
+				UnmanagedGatewayTest(t, "openshift-default")
+			})
+			t.NewSubTest("managed-custom-names").Run(func(t framework.TestContext) {
+				ManagedGatewayTest(t, "openshift-default")
+			})
+			t.NewSubTest("managed-owner-custom-names").Run(func(t framework.TestContext) {
+				ManagedOwnerGatewayTest(t, "openshift-default")
+			})
+			t.NewSubTest("managed-short-name-custom-names").Run(func(t framework.TestContext) {
+				ManagedGatewayShortNameTest(t, "openshift-default")
+			})
 		})
 }
 
-func ManagedOwnerGatewayTest(t framework.TestContext) {
+func ManagedOwnerGatewayTest(t framework.TestContext, gatewayClassName string) {
 	image := fmt.Sprintf("%s/app:%s", t.Settings().Image.Hub, strings.TrimSuffix(t.Settings().Image.Tag, "-distroless"))
 	t.ConfigIstio().YAML(appNs.Name(), fmt.Sprintf(`
 apiVersion: v1
@@ -142,19 +187,19 @@ spec:
 		t.Fatal(err)
 	}
 
-	t.ConfigIstio().YAML(appNs.Name(), `
+	t.ConfigIstio().YAML(appNs.Name(), fmt.Sprintf(`
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: Gateway
 metadata:
   name: managed-owner
 spec:
-  gatewayClassName: istio
+  gatewayClassName: %s
   listeners:
   - name: default
     hostname: "*.example.com"
     port: 80
     protocol: HTTP
-`).ApplyOrFail(t)
+`, gatewayClassName)).ApplyOrFail(t)
 
 	// Make sure Gateway becomes programmed..
 	client := t.Clusters().Kube().Default().GatewayAPI().GatewayV1beta1().Gateways(appNs.Name())
@@ -188,13 +233,14 @@ spec:
 	assert.Equal(t, svc.Spec.Type, corev1.ServiceTypeClusterIP)
 }
 
-func ManagedGatewayTest(t framework.TestContext) {
-	t.ConfigIstio().YAML(appNs.Name(), `apiVersion: gateway.networking.k8s.io/v1beta1
+func ManagedGatewayTest(t framework.TestContext, gatewayClassName string) {
+	t.ConfigIstio().YAML(appNs.Name(), fmt.Sprintf(`
+apiVersion: gateway.networking.k8s.io/v1beta1
 kind: Gateway
 metadata:
   name: gateway
 spec:
-  gatewayClassName: istio
+  gatewayClassName: %s
   listeners:
   - name: default
     hostname: "*.example.com"
@@ -226,7 +272,7 @@ spec:
   - backendRefs:
     - name: d
       port: 80
-`).ApplyOrFail(t)
+`, gatewayClassName)).ApplyOrFail(t)
 	testCases := []struct {
 		check echo.Checker
 		from  echo.Instances
@@ -254,20 +300,21 @@ spec:
 				HTTP: echo.HTTP{
 					Headers: headers.New().WithHost(tc.host).Build(),
 				},
-				Address: fmt.Sprintf("gateway-istio.%s.svc.cluster.local", appNs.Name()),
+				Address: fmt.Sprintf("gateway-%s.%s.svc.cluster.local", gatewayClassName, appNs.Name()),
 				Check:   tc.check,
 			})
 		})
 	}
 }
 
-func ManagedGatewayShortNameTest(t framework.TestContext) {
-	t.ConfigIstio().YAML(appNs.Name(), `apiVersion: gateway.networking.k8s.io/v1beta1
+func ManagedGatewayShortNameTest(t framework.TestContext, gatewayClassName string) {
+	t.ConfigIstio().YAML(appNs.Name(), fmt.Sprintf(`
+apiVersion: gateway.networking.k8s.io/v1beta1
 kind: Gateway
 metadata:
   name: gateway
 spec:
-  gatewayClassName: istio
+  gatewayClassName: %s
   listeners:
   - name: default
     hostname: "bar"
@@ -285,7 +332,7 @@ spec:
   - backendRefs:
     - name: b
       port: 80
-`).ApplyOrFail(t)
+`, gatewayClassName)).ApplyOrFail(t)
 	a := match.ServiceName(echo.NamespacedName{Name: "a", Namespace: appNs}).GetMatches(apps).Instances()[0]
 	a.CallOrFail(t, echo.CallOptions{
 		Port:   echo.Port{ServicePort: 80},
@@ -293,7 +340,7 @@ spec:
 		HTTP: echo.HTTP{
 			Headers: headers.New().WithHost("bar").Build(),
 		},
-		Address: fmt.Sprintf("gateway-istio.%s.svc.cluster.local", appNs.Name()),
+		Address: fmt.Sprintf("gateway-%s.%s.svc.cluster.local", gatewayClassName, appNs.Name()),
 		Check:   check.OK(),
 		Retry: echo.Retry{
 			Options: []retry.Option{retry.Timeout(time.Minute)},
@@ -313,7 +360,7 @@ spec:
 	})
 }
 
-func UnmanagedGatewayTest(t framework.TestContext) {
+func UnmanagedGatewayTest(t framework.TestContext, gatewayClassName string) {
 	ingressutil.CreateIngressKubeSecret(t, "test-gateway-cert-same", ingressutil.TLS, ingressutil.IngressCredentialA,
 		false, t.Clusters().Configs()...)
 	ingressutil.CreateIngressKubeSecretInNamespace(t, "test-gateway-cert-cross", ingressutil.TLS, ingressutil.IngressCredentialB,
@@ -329,7 +376,7 @@ spec:
   addresses:
   - value: istio-ingressgateway
     type: Hostname
-  gatewayClassName: istio
+  gatewayClassName: %s
   listeners:
   - name: http
     hostname: "*.domain.example"
@@ -378,7 +425,7 @@ spec:
       certificateRefs:
       - kind: Secret
         name: test-gateway-cert-same
-`, appNs.Name())).
+`, gatewayClassName, appNs.Name())).
 		YAML(appNs.Name(), fmt.Sprintf(`
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: HTTPRoute

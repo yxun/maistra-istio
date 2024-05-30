@@ -183,6 +183,23 @@ func ApplyRestrictedRBAC(istioNs namespace.Getter) resource.SetupFn {
 	}
 }
 
+func PatchIstiodAndRestart(istioNs namespace.Getter, patch string) resource.SetupFn {
+	return func(ctx resource.Context) error {
+		kubeClient := ctx.Clusters().Default().Kube()
+		var lastSeenGeneration int64
+		if err := waitForIstiod(kubeClient, istioNs.Get(), &lastSeenGeneration); err != nil {
+			return err
+		}
+		if err := patchIstiodArgs(kubeClient, istioNs.Get(), patch); err != nil {
+			return err
+		}
+		if err := waitForIstiod(kubeClient, istioNs.Get(), &lastSeenGeneration); err != nil {
+			return err
+		}
+		return nil
+	}
+}
+
 func DisableWebhooksAndRestart(istioNs namespace.Getter) resource.SetupFn {
 	return func(ctx resource.Context) error {
 		kubeClient := ctx.Clusters().Default().Kube()
