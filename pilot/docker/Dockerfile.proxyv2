@@ -5,12 +5,9 @@ WORKDIR /
 ARG proxy_version
 ARG SIDECAR=envoy
 
-# hadolint ignore=DL3041
-RUN cd /etc/yum.repos.d/ && \
-    sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* && \
-    sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
-# hadolint ignore=DL3041
-RUN dnf -y upgrade --refresh --nobest && \
+# hadolint ignore=DL3039,DL3041
+RUN sed -i -e 's/mirrorlist/#mirrorlist/g' -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-* && \
+    dnf -y upgrade --refresh --nobest && \
     dnf -y install iptables iproute openssl && \
     dnf -y clean all
 
