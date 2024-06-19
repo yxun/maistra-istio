@@ -62,7 +62,9 @@ func NewResourceManager(opts ControllerOptions, mrc memberroll.MemberRollControl
 		inff: informerFactory,
 		cmi:  kclient.NewFiltered[*corev1.ConfigMap](opts.KubeClient, kclient.Filter{}),
 		esi:  kclient.NewFiltered[*discoveryv1.EndpointSlice](opts.KubeClient, kclient.Filter{}),
-		pi:   kclient.NewFiltered[*corev1.Pod](opts.KubeClient, kclient.Filter{}),
+		pi: kclient.NewFiltered[*corev1.Pod](opts.KubeClient, kclient.Filter{
+			ObjectTransform: kube.StripPodUnusedFields,
+		}),
 		si:   kclient.NewFiltered[*corev1.Service](opts.KubeClient, kclient.Filter{}),
 		smpi: informerFactory.Federation().V1().ServiceMeshPeers(),
 		sei:  informerFactory.Federation().V1().ExportedServiceSets(),
