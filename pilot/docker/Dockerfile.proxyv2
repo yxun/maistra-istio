@@ -1,4 +1,4 @@
-FROM quay.io/centos/centos:stream8
+FROM quay.io/centos/centos:stream9
 
 WORKDIR /
 
@@ -6,9 +6,8 @@ ARG proxy_version
 ARG SIDECAR=envoy
 
 # hadolint ignore=DL3039,DL3041
-RUN sed -i -e 's/mirrorlist/#mirrorlist/g' -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-* && \
-    dnf -y upgrade --refresh --nobest && \
-    dnf -y install iptables iproute openssl && \
+RUN dnf -y upgrade --refresh --nobest && \
+    dnf -y install iptables iproute openssl-3.0.7 openssl-devel-3.0.7 && \
     dnf -y clean all
 
 # Copy Envoy bootstrap templates used by pilot-agent
