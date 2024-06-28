@@ -1,4 +1,4 @@
-FROM quay.io/centos/centos:stream8
+FROM quay.io/centos/centos:stream9
 
 # Install the certs.
 COPY certs/             /var/lib/istio/
@@ -15,9 +15,8 @@ COPY sudoers /etc/sudoers
 # * hostname - used in the script istio-start.sh
 # * ps - for debugging purposes
 # hadolint ignore=DL3039,DL3041
-RUN sed -i -e 's/mirrorlist/#mirrorlist/g' -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-* && \
-    dnf -y upgrade --refresh --nobest && \
-    dnf -y install iptables iproute openssl sudo hostname procps && \
+RUN dnf -y upgrade --refresh --nobest && \
+    dnf -y install iptables iproute sudo hostname procps openssl-3.0.7 openssl-devel-3.0.7 && \
     dnf -y clean all
 
 # Install the sidecar components

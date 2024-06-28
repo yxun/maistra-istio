@@ -74,9 +74,9 @@ const (
 	UbuntuJammy   VMDistro = "UbuntuJammy"
 	Debian11      VMDistro = "Debian11"
 	Rockylinux8   VMDistro = "Centos8"
-	CentosStream8 VMDistro = "CentosStream8"
+	CentosStream9 VMDistro = "CentosStream9"
 
-	DefaultVMDistro = UbuntuJammy
+	DefaultVMDistro = CentosStream9
 )
 
 // Config defines the options for creating an Echo component.

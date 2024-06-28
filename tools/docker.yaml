@@ -80,8 +80,8 @@ images:
   targets:
     - ${TARGET_OUT_LINUX}/extauthz
 
-- name: app_sidecar_centos_stream_8
-  dockerfile: pkg/test/echo/docker/Dockerfile.app_sidecar_centos_stream_8
+- name: app_sidecar_centos_stream_9
+  dockerfile: pkg/test/echo/docker/Dockerfile.app_sidecar_centos_stream_9
   files:
   - tools/packaging/common/envoy_bootstrap.json
   - tests/testdata/certs
