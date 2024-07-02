@@ -1,4 +1,7 @@
 {
+  "gateways": {
+    "securityContext": {}
+  },
   "global": {
     "arch": {
       "amd64": 2,
