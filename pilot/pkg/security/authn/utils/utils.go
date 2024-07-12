@@ -75,9 +75,9 @@ func BuildInboundTLS(mTLSMode model.MutualTLSMode, node *model.Proxy,
 		ciphers = mc.MeshMTLS.CipherSuites
 	}
 	if ciphers == nil {
-		ciphers = tls_features.TLSCipherSuites.Get()
-		if len(ciphers) == 0 {
-			ciphers = SupportedCiphers
+		opensslCiphers := tls_features.TLSCipherSuites.Get()
+		if len(opensslCiphers) > 0 {
+			ciphers = opensslCiphers
 		}
 	}
 	// Set Minimum TLS version to match the default client version and allowed strong cipher suites for sidecars.

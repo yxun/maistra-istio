@@ -71,7 +71,7 @@ func TestGetMTLSCipherSuites(t *testing.T) {
 	}{
 		{
 			name:                     "Default MTLS supported Ciphers",
-			expectedMTLSCipherSuites: SupportedCiphers,
+			expectedMTLSCipherSuites: nil,
 		},
 		{
 			name: "Configure 1 MTLS cipher suite",

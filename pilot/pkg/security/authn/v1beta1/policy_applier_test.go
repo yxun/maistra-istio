@@ -41,7 +41,6 @@ import (
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/model/test"
 	"istio.io/istio/pilot/pkg/security/authn"
-	"istio.io/istio/pilot/pkg/security/authn/utils"
 	"istio.io/istio/pilot/pkg/util/protoconv"
 	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/host"
@@ -1505,9 +1504,7 @@ func TestAuthnFilterConfig(t *testing.T) {
 }
 
 func TestInboundMTLSSettings(t *testing.T) {
-	runTestInboundMTLSSettings(t, &tls.TlsParameters{
-		CipherSuites: utils.SupportedCiphers,
-	})
+	runTestInboundMTLSSettings(t, &tls.TlsParameters{})
 }
 
 func TestTLSProtocolVersionInboundMTLSSettings(t *testing.T) {
@@ -1521,7 +1518,6 @@ func TestTLSProtocolVersionInboundMTLSSettings(t *testing.T) {
 	runTestInboundMTLSSettings(t, &tls.TlsParameters{
 		TlsMinimumProtocolVersion: tls.TlsParameters_TLSv1_2,
 		TlsMaximumProtocolVersion: tls.TlsParameters_TLSv1_3,
-		CipherSuites:              utils.SupportedCiphers,
 	})
 }
 
