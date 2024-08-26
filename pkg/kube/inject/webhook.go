@@ -1002,74 +1002,7 @@ func (wh *Webhook) inject(ar *kube.AdmissionReview, path string) *kube.Admission
 		}
 	}
 
-	var err error
-	var proxyUID *int64
-	var proxyGID *int64
-	tproxyInterceptionMode := pod.Annotations != nil && pod.Annotations["sidecar.istio.io/interceptionMode"] == string(model.InterceptionTproxy)
-	if len(pod.Spec.Containers) == 1 && pod.Spec.Containers[0].Name == ProxyContainerName {
-		// we're injecting a gateway pod
-		// we set proxyUID/GID to whatever UID/GID is specified in securityContext.RunAsUser/RunAsGroup
-		if pod.Spec.SecurityContext != nil {
-			if pod.Spec.SecurityContext.RunAsUser != nil {
-				proxyUID = pointer.Int64(*pod.Spec.SecurityContext.RunAsUser)
-				proxyGID = pointer.Int64(*proxyUID)
-			}
-			if pod.Spec.SecurityContext.RunAsGroup != nil {
-				proxyGID = pointer.Int64(*pod.Spec.SecurityContext.RunAsGroup)
-			}
-		}
-		container := pod.Spec.Containers[0]
-		if container.SecurityContext != nil {
-			if container.SecurityContext.RunAsUser != nil {
-				proxyUID = pointer.Int64(*container.SecurityContext.RunAsUser)
-				if proxyGID == nil {
-					proxyGID = pointer.Int64(*proxyUID)
-				}
-			}
-			if container.SecurityContext.RunAsGroup != nil {
-				proxyGID = pointer.Int64(*container.SecurityContext.RunAsGroup)
-			}
-		}
-	} else if tproxyInterceptionMode {
-		proxyUID = pointer.Int64(0)
-		proxyGID = pointer.Int64(DefaultSidecarProxyGID)
-	} else {
-		// we're injecting a normal pod (with app container and optional sidecar container)
-		// we set proxyUID to the main app container's UID incremented by 1
-		// we set proxyGID to the main app container's UID
-		proxyUID, err = getProxyUIDFromAnnotation(pod)
-		if err != nil {
-			log.Infof("Could not get proxyUID from annotation: %v", err)
-		}
-		if proxyUID == nil {
-			if pod.Spec.SecurityContext != nil && pod.Spec.SecurityContext.RunAsUser != nil {
-				proxyUID = pointer.Int64(*pod.Spec.SecurityContext.RunAsUser + 1)
-				// valid GID for fsGroup defaults to first int in UID range in OCP's restricted SCC
-				proxyGID = pod.Spec.SecurityContext.RunAsUser
-			}
-			for _, c := range pod.Spec.Containers {
-				if c.Name != ProxyContainerName && c.SecurityContext != nil && c.SecurityContext.RunAsUser != nil {
-					uid := *c.SecurityContext.RunAsUser + 1
-					if proxyUID == nil || uid > *proxyUID {
-						proxyUID = &uid
-					}
-					if proxyGID == nil {
-						proxyGID = c.SecurityContext.RunAsUser
-					}
-				}
-			}
-		}
-	}
-
-	// We need to set the UID/GID to something, or the injected manifest will fail to parse (this happens because
-	// {{ .ProxyUID/GID }} in the charts get resolved to "nil" (with quotes), which can't be parsed as a float).
-	if proxyUID == nil {
-		proxyUID = pointer.Int64(DefaultSidecarProxyUID)
-	}
-	if proxyGID == nil {
-		proxyGID = pointer.Int64(DefaultSidecarProxyUID)
-	}
-
+	proxyUID, proxyGID := findProxyUGID(pod)
 	deploy, typeMeta := kube.GetDeployMetaFromPod(&pod)
 	params := InjectionParameters{
 		pod:                 &pod,
@@ -1105,6 +1038,81 @@ func (wh *Webhook) inject(ar *kube.AdmissionReview, path string) *kube.Admission
 	}
 	totalSuccessfulInjections.Increment()
 	return &reviewResponse
+}
+
+func findProxyUGID(pod corev1.Pod) (proxyUID, proxyGID *int64) {
+	tproxyInterceptionMode := pod.Annotations != nil && pod.Annotations["sidecar.istio.io/interceptionMode"] == string(model.InterceptionTproxy)
+	if len(pod.Spec.Containers) == 1 && pod.Spec.Containers[0].Name == ProxyContainerName {
+		// we're injecting a gateway pod
+		// we set proxyUID/GID to whatever UID/GID is specified in securityContext.RunAsUser/RunAsGroup
+		if pod.Spec.SecurityContext != nil {
+			if pod.Spec.SecurityContext.RunAsUser != nil {
+				proxyUID = pointer.Int64(*pod.Spec.SecurityContext.RunAsUser)
+				proxyGID = pointer.Int64(*proxyUID)
+			}
+			if pod.Spec.SecurityContext.RunAsGroup != nil {
+				proxyGID = pointer.Int64(*pod.Spec.SecurityContext.RunAsGroup)
+			}
+		}
+		container := pod.Spec.Containers[0]
+		if container.SecurityContext != nil {
+			if container.SecurityContext.RunAsUser != nil {
+				proxyUID = pointer.Int64(*container.SecurityContext.RunAsUser)
+				if proxyGID == nil {
+					proxyGID = pointer.Int64(*proxyUID)
+				}
+			}
+			if container.SecurityContext.RunAsGroup != nil {
+				proxyGID = pointer.Int64(*container.SecurityContext.RunAsGroup)
+			}
+		}
+	} else if tproxyInterceptionMode {
+		proxyUID = pointer.Int64(0)
+		proxyGID = pointer.Int64(DefaultSidecarProxyGID)
+	} else {
+		// we're injecting a normal pod (with app container and optional sidecar container)
+		// we set proxyUID to the main app container's UID incremented by 1
+		// we set proxyGID to the main app container's UID
+		var err error
+		proxyUID, err = getProxyUIDFromAnnotation(pod)
+		if err != nil {
+			log.Warnf("Could not get proxyUID from annotation: %v", err)
+		}
+		if proxyUID == nil {
+			if pod.Spec.SecurityContext != nil && pod.Spec.SecurityContext.RunAsUser != nil {
+				proxyUID = pointer.Int64(*pod.Spec.SecurityContext.RunAsUser + 1)
+				proxyGID = pointer.Int64(*proxyUID)
+				if pod.Spec.SecurityContext.RunAsGroup != nil {
+					proxyGID = pointer.Int64(*pod.Spec.SecurityContext.RunAsGroup + 1)
+				}
+			}
+			for _, c := range pod.Spec.Containers {
+				if c.Name != ProxyContainerName && c.SecurityContext != nil && c.SecurityContext.RunAsUser != nil {
+					uid := *c.SecurityContext.RunAsUser + 1
+					if proxyUID == nil || uid > *proxyUID {
+						proxyUID = &uid
+					}
+					gid := uid
+					if c.SecurityContext.RunAsGroup != nil {
+						gid = *c.SecurityContext.RunAsGroup + 1
+					}
+					if proxyGID == nil || gid > *proxyGID {
+						proxyGID = &gid
+					}
+				}
+			}
+		}
+	}
+
+	// We need to set the UID/GID to something, or the injected manifest will fail to parse (this happens because
+	// {{ .ProxyUID/GID }} in the charts get resolved to "nil" (with quotes), which can't be parsed as a float).
+	if proxyUID == nil {
+		proxyUID = pointer.Int64(DefaultSidecarProxyUID)
+	}
+	if proxyGID == nil {
+		proxyGID = pointer.Int64(DefaultSidecarProxyUID)
+	}
+	return
 }
 
 func (wh *Webhook) serveInject(w http.ResponseWriter, r *http.Request) {
