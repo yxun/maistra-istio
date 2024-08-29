@@ -916,8 +916,10 @@ func GetProxyIDsFromPod(pod *corev1.Pod) (uid int64, gid int64) {
 		if proxyUID == nil {
 			if pod.Spec.SecurityContext != nil && pod.Spec.SecurityContext.RunAsUser != nil {
 				proxyUID = ptr.To(*pod.Spec.SecurityContext.RunAsUser + 1)
-				// valid GID for fsGroup defaults to first int in UID range in OCP's restricted SCC
-				proxyGID = pod.Spec.SecurityContext.RunAsUser
+				proxyGID = ptr.To(*proxyUID)
+				if pod.Spec.SecurityContext.RunAsGroup != nil {
+					proxyGID = ptr.To(*pod.Spec.SecurityContext.RunAsGroup + 1)
+				}
 			}
 			for _, c := range pod.Spec.Containers {
 				if c.Name != ProxyContainerName && c.SecurityContext != nil && c.SecurityContext.RunAsUser != nil {
@@ -925,8 +927,12 @@ func GetProxyIDsFromPod(pod *corev1.Pod) (uid int64, gid int64) {
 					if proxyUID == nil || uid > *proxyUID {
 						proxyUID = &uid
 					}
-					if proxyGID == nil {
-						proxyGID = c.SecurityContext.RunAsUser
+					gid := uid
+					if c.SecurityContext.RunAsGroup != nil {
+						gid = *c.SecurityContext.RunAsGroup + 1
+					}
+					if proxyGID == nil || gid > *proxyGID {
+						proxyGID = &gid
 					}
 				}
 			}

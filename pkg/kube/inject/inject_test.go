@@ -45,6 +45,7 @@ import (
 	"istio.io/istio/pkg/kube/kclient"
 	istiolog "istio.io/istio/pkg/log"
 	"istio.io/istio/pkg/platform"
+	"istio.io/istio/pkg/ptr"
 	"istio.io/istio/pkg/test"
 	"istio.io/istio/pkg/util/sets"
 )
@@ -1216,6 +1217,176 @@ func BenchmarkInjection(b *testing.B) {
 						Namespace: tt.in.Namespace,
 					},
 				}, "")
+			}
+		})
+	}
+}
+
+func TestGetProxyIDsFromPod(t *testing.T) {
+	cases := []struct {
+		name        string
+		pod         corev1.Pod
+		expectedUID int64
+		expectedGID int64
+	}{{
+		name: "tproxy: security context should be ignored; UID=0 and GID=1337 expected",
+		pod: corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{
+					annotation.SidecarInterceptionMode.Name: string(model.InterceptionTproxy),
+				},
+			},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "app",
+					SecurityContext: &corev1.SecurityContext{
+						RunAsUser:  ptr.Of[int64](1000),
+						RunAsGroup: ptr.Of[int64](1000),
+					},
+				}},
+				SecurityContext: &corev1.PodSecurityContext{
+					RunAsUser:  ptr.Of[int64](1000),
+					RunAsGroup: ptr.Of[int64](1000),
+				},
+			},
+		},
+		expectedUID: 0,
+		expectedGID: 1337,
+	}, {
+		name: "sidecar: pod security context: proxy UID should be incremented and GID should be equal to app UID",
+		pod: corev1.Pod{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "app",
+				}},
+				SecurityContext: &corev1.PodSecurityContext{
+					RunAsUser:  ptr.Of[int64](1000),
+					RunAsGroup: ptr.Of[int64](1001),
+				},
+			},
+		},
+		expectedUID: 1001,
+		expectedGID: 1002,
+	}, {
+		name: "sidecar: pod security context with UID only: proxy UID should be incremented and GID should be equal to app UID",
+		pod: corev1.Pod{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "app",
+				}},
+				SecurityContext: &corev1.PodSecurityContext{
+					RunAsUser: ptr.Of[int64](1000),
+				},
+			},
+		},
+		expectedUID: 1001,
+		expectedGID: 1001,
+	}, {
+		name: "sidecar: container security context with UID and GID: proxy UID should be incremented and GID should be equal to app UID",
+		pod: corev1.Pod{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "app",
+					SecurityContext: &corev1.SecurityContext{
+						RunAsUser:  ptr.Of[int64](1000),
+						RunAsGroup: ptr.Of[int64](1001),
+					},
+				}},
+			},
+		},
+		expectedUID: 1001,
+		expectedGID: 1002,
+	}, {
+		name: "sidecar: container security context with UID only: proxy UID should be incremented and GID should be equal to app UID",
+		pod: corev1.Pod{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "app",
+					SecurityContext: &corev1.SecurityContext{
+						RunAsUser: ptr.Of[int64](1000),
+					},
+				}},
+			},
+		},
+		expectedUID: 1001,
+		expectedGID: 1001,
+	}, {
+		name: "sidecar: pod and container security contexts: pod security context is chosen, because has bigger values",
+		pod: corev1.Pod{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "app",
+					SecurityContext: &corev1.SecurityContext{
+						RunAsUser:  ptr.Of[int64](1000),
+						RunAsGroup: ptr.Of[int64](1001),
+					},
+				}},
+				SecurityContext: &corev1.PodSecurityContext{
+					RunAsUser:  ptr.Of[int64](2000),
+					RunAsGroup: ptr.Of[int64](2001),
+				},
+			},
+		},
+		expectedUID: 2001,
+		expectedGID: 2002,
+	}, {
+		name: "sidecar: pod and container security contexts: container security context is chosen, because has bigger values",
+		pod: corev1.Pod{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "app",
+					SecurityContext: &corev1.SecurityContext{
+						RunAsUser:  ptr.Of[int64](2000),
+						RunAsGroup: ptr.Of[int64](2001),
+					},
+				}},
+				SecurityContext: &corev1.PodSecurityContext{
+					RunAsUser:  ptr.Of[int64](1000),
+					RunAsGroup: ptr.Of[int64](1001),
+				},
+			},
+		},
+		expectedUID: 2001,
+		expectedGID: 2002,
+	}, {
+		name: "sidecar: pod security context with UID and GID set to 0: proxy UID should be incremented and GID should overlap with the app GID",
+		pod: corev1.Pod{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "app",
+				}},
+				SecurityContext: &corev1.PodSecurityContext{
+					RunAsUser:  ptr.Of[int64](0),
+					RunAsGroup: ptr.Of[int64](0),
+				},
+			},
+		},
+		expectedUID: 1,
+		expectedGID: 1,
+	}, {
+		name: "sidecar: container security context with UID and GID set to 0: proxy UID should be incremented and GID should overlap with the app GID",
+		pod: corev1.Pod{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "app",
+					SecurityContext: &corev1.SecurityContext{
+						RunAsUser:  ptr.Of[int64](0),
+						RunAsGroup: ptr.Of[int64](0),
+					},
+				}},
+			},
+		},
+		expectedUID: 1,
+		expectedGID: 1,
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proxyUID, proxyGID := GetProxyIDsFromPod(&tc.pod)
+			if proxyUID != tc.expectedUID {
+				t.Errorf("Expected UID %d, but got %d", tc.expectedUID, proxyUID)
+			}
+			if proxyGID != tc.expectedGID {
+				t.Errorf("Expected GID %d, but got %d", tc.expectedGID, proxyGID)
 			}
 		})
 	}
