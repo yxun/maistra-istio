@@ -270,7 +270,7 @@ var VMImages = map[echo.VMDistro]string{
 	echo.UbuntuXenial:  "app_sidecar_ubuntu_bionic",
 	echo.UbuntuJammy:   "app_sidecar_ubuntu_jammy",
 	echo.Debian11:      "app_sidecar_debian_11",
-	echo.CentosStream9: "app_sidecar_centos_stream_9",
+	echo.CentosStream9: "app_sidecar_rocky_linux_9",
 	// echo.Rockylinux8:  "app_sidecar_rockylinux_8", TODO(https://github.com/istio/istio/issues/38224)
 }
 
